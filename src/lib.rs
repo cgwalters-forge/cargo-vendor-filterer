@@ -495,7 +495,7 @@ fn gather_config(args: &Args) -> Result<Option<VendorFilter>> {
         return Ok(Some(f));
     };
     // Otherwise gather from `package.metadata.vendor-filter` in Cargo.toml
-    let meta = new_metadata_cmd(args.manifest_path.as_deref(), args.offline);
+    let meta = new_metadata_cmd(args.manifest_path.as_deref(), args.offline, None);
     let meta = meta
         .exec()
         .context("Executing cargo metadata (first run)")?;
@@ -744,7 +744,7 @@ impl Args {
 
     /// Find the root package
     fn get_root_package(&self) -> Result<Option<Package>> {
-        let mut command = new_metadata_cmd(self.manifest_path.as_deref(), self.offline);
+        let mut command = new_metadata_cmd(self.manifest_path.as_deref(), self.offline, None);
         command.no_deps();
 
         let meta = command.exec().context("Executing cargo metadata")?;
@@ -752,11 +752,23 @@ impl Args {
     }
 }
 
-fn new_metadata_cmd(path: Option<&Utf8Path>, offline: bool) -> MetadataCommand {
+/// Prepare `cargo metadata`, optionally filtered to the dependencies of one
+/// platform.
+fn new_metadata_cmd(
+    path: Option<&Utf8Path>,
+    offline: bool,
+    platform: Option<&str>,
+) -> MetadataCommand {
     let mut command = MetadataCommand::new();
+    // `other_options` replaces the previous ones, so they're all set at once.
+    let mut options = Vec::new();
     if offline {
-        command.other_options(vec![OFFLINE.to_string()]);
+        options.push(OFFLINE.to_string());
     }
+    if let Some(platform) = platform {
+        options.push(format!("--filter-platform={platform}"));
+    }
+    command.other_options(options);
     if let Some(p) = path {
         command.manifest_path(p);
     }
@@ -769,7 +781,7 @@ fn get_vendored_package_dirs(args: &Args) -> Result<HashMap<cargo_metadata::Pack
     let all_manifest_paths = args.get_all_manifest_paths();
     let mut pkgs_by_name: HashMap<_, Vec<_>> = HashMap::new();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline);
+        let mut command = new_metadata_cmd(manifest_path, args.offline, None);
         command.features(AllFeatures);
         let meta = command.exec().context("Executing cargo metadata")?;
         meta.packages
@@ -823,7 +835,7 @@ fn get_packages_for_features(
     let all_manifest_paths = args.get_all_manifest_paths();
     let mut packages = HashMap::new();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline);
+        let mut command = new_metadata_cmd(manifest_path, args.offline, None);
         if config.all_features {
             command.features(AllFeatures);
         }
@@ -906,7 +918,7 @@ fn add_packages_for_platform<'p>(
 ) -> Result<()> {
     let all_manifest_paths = args.get_all_manifest_paths();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline);
+        let mut command = new_metadata_cmd(manifest_path, args.offline, platform);
         if config.all_features {
             command.features(AllFeatures);
         }
@@ -920,10 +932,6 @@ fn add_packages_for_platform<'p>(
         {
             command.features(SomeFeatures(features.clone()));
         }
-        if let Some(platform) = platform {
-            command.other_options(vec![format!("--filter-platform={platform}")]);
-        }
-
         let meta = command.exec().context("Executing cargo metadata")?;
         let metadata_packages = meta.packages.into_iter().map(|package| package.id);
         let resolve = meta.resolve;
@@ -1247,6 +1255,32 @@ pub fn run(args: Args) -> Result<()> {
 
     eprintln!("Generated: {final_output_path}");
     Ok(())
+}
+
+#[test]
+fn test_new_metadata_cmd_options() {
+    const PLATFORM: &str = "x86_64-unknown-linux-gnu";
+    let filter_platform = format!("--filter-platform={PLATFORM}");
+    for (offline, platform, expected) in [
+        (false, None, vec![]),
+        (true, None, vec![OFFLINE]),
+        (false, Some(PLATFORM), vec![filter_platform.as_str()]),
+        (
+            true,
+            Some(PLATFORM),
+            vec![OFFLINE, filter_platform.as_str()],
+        ),
+    ] {
+        let cmd = new_metadata_cmd(None, offline, platform).cargo_command();
+        let args: Vec<_> = cmd.get_args().filter_map(|a| a.to_str()).collect();
+        for option in [OFFLINE, filter_platform.as_str()] {
+            assert_eq!(
+                args.contains(&option),
+                expected.contains(&option),
+                "{option} with offline={offline} platform={platform:?}: {args:?}"
+            );
+        }
+    }
 }
 
 #[test]
