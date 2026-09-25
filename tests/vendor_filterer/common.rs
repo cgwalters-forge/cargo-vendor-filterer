@@ -141,6 +141,46 @@ pub(crate) fn vendor(options: VendorOptions) -> Result<Output> {
     })
 }
 
+/// What rustc reports when the LLVM it links lacks the backend for a target.
+const LLVM_MISSING_TARGET: &str = "No available targets are compatible with triple";
+
+/// Whether rustc on this host can compile for `target`.
+fn rustc_supports_target(target: &str) -> bool {
+    let output = Command::new("rustc")
+        .args(["--print=cfg", "--target", target])
+        .output()
+        .expect("failed to run rustc");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() && stderr.contains(LLVM_MISSING_TARGET) {
+        return false;
+    }
+    // Any other error, e.g. a target rustc doesn't know at all, is a bug in
+    // the test and must not be skipped.
+    assert!(
+        output.status.success(),
+        "rustc --print=cfg --target {target} failed: {stderr}"
+    );
+    true
+}
+
+/// Whether rustc on this host can compile for all of `targets`; if not, tell
+/// why the calling test is skipped.
+///
+/// Cargo can't resolve dependencies for a target unless rustc can compile for
+/// it, and distribution toolchains often link an LLVM built only with some
+/// backends: e.g. Alpine's on ppc64le has neither X86 nor AArch64.
+pub(crate) fn targets_supported(targets: &[&str]) -> bool {
+    let missing: Vec<_> = targets
+        .iter()
+        .filter(|t| !rustc_supports_target(t))
+        .collect();
+    if missing.is_empty() {
+        return true;
+    }
+    eprintln!("Skipping test: rustc on this host cannot compile for {missing:?}");
+    false
+}
+
 /// Allocate a temporary directory and also gather its UTF-8 path.
 pub(crate) fn tempdir() -> Result<(tempfile::TempDir, Utf8PathBuf)> {
     let td = tempfile::tempdir()?;

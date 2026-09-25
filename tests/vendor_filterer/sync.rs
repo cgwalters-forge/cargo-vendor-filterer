@@ -1,6 +1,6 @@
 use crate::vendor_filterer::common::{verify_crate_is_no_stub, verify_no_macos, verify_no_windows};
 
-use super::common::{tempdir, vendor, write_file_create_parents, VendorOptions};
+use super::common::{targets_supported, tempdir, vendor, write_file_create_parents, VendorOptions};
 
 #[test]
 fn basic_sync() {
@@ -52,6 +52,10 @@ fn basic_sync() {
 
 #[test]
 fn sync_with_platform_filter() {
+    const PLATFORMS: &[&str] = &["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
+    if !targets_supported(PLATFORMS) {
+        return;
+    }
     let (_td, test_folder) = tempdir().unwrap();
     let dep_a = test_folder.join("A");
     let dep_b = test_folder.join("B");
@@ -94,7 +98,7 @@ fn sync_with_platform_filter() {
         output: Some(&output_folder),
         manifest_path: Some(&manifest_a),
         sync: vec![&manifest_b],
-        platforms: Some(&["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]),
+        platforms: Some(PLATFORMS),
         ..Default::default()
     })
     .unwrap();

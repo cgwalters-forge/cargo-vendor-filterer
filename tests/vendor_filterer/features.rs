@@ -1,8 +1,11 @@
 use super::common::{
-    tempdir, vendor, verify_crate_is_no_stub, verify_crate_is_stub, write_file_create_parents,
-    VendorOptions,
+    targets_supported, tempdir, vendor, verify_crate_is_no_stub, verify_crate_is_stub,
+    write_file_create_parents, VendorOptions,
 };
 use std::process::Command;
+
+/// The platform the manifests of these tests filter to
+const PLATFORM: &str = "x86_64-unknown-linux-gnu";
 
 fn tree_contains_package(tree: &str, package: &str) -> bool {
     tree.lines().any(|line| {
@@ -13,6 +16,9 @@ fn tree_contains_package(tree: &str, package: &str) -> bool {
 
 #[test]
 fn native_tls_feature_excludes_rustls_and_ring_on_linux() {
+    if !targets_supported(&[PLATFORM]) {
+        return;
+    }
     let (_td, test_folder) = tempdir().unwrap();
     let manifest = write_file_create_parents(
         &test_folder,
@@ -58,6 +64,9 @@ fn native_tls_feature_excludes_rustls_and_ring_on_linux() {
 
 #[test]
 fn disabled_transitive_feature_does_not_retain_ring() {
+    if !targets_supported(&[PLATFORM]) {
+        return;
+    }
     let (_td, test_folder) = tempdir().unwrap();
     let manifest = write_file_create_parents(
         &test_folder,
@@ -140,6 +149,9 @@ fn disabled_transitive_feature_does_not_retain_ring() {
 
 #[test]
 fn all_features_retains_all_feature_dependencies() {
+    if !targets_supported(&[PLATFORM]) {
+        return;
+    }
     let (_td, test_folder) = tempdir().unwrap();
     let manifest = write_file_create_parents(
         &test_folder,
