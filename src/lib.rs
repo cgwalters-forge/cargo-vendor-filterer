@@ -16,7 +16,8 @@ use std::process::Command;
 use std::vec;
 
 mod dep_kinds_filtering;
-mod tiers;
+/// Curated sets of targets, by their Rust support tier
+pub mod tiers;
 
 /// The path we use in Cargo.toml i.e. `package.metadata.vendor-filter`
 pub const CONFIG_KEY: &str = "vendor-filter";

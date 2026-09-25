@@ -3,17 +3,21 @@ use std::fs;
 
 use cargo_vendor_filterer::CARGO_TOML_PRE_VENDOR_FILTER;
 
-use super::common::{is_stub, tempdir, vendor, VendorOptions};
+use super::common::{is_stub, targets_supported, tempdir, vendor, VendorOptions};
 
 #[test]
 #[serial_test::parallel]
 fn json_report_lists_the_stubs() {
+    const PLATFORMS: &[&str] = &["x86_64-unknown-linux-gnu"];
+    if !targets_supported(PLATFORMS) {
+        return;
+    }
     let (_td, mut test_folder) = tempdir().unwrap();
     let report_path = test_folder.join("report.json");
     test_folder.push("vendor");
     let output = vendor(VendorOptions {
         output: Some(&test_folder),
-        platforms: Some(&["x86_64-unknown-linux-gnu"]),
+        platforms: Some(PLATFORMS),
         json: Some(&report_path),
         ..Default::default()
     })

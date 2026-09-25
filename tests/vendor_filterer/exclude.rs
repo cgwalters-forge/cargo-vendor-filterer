@@ -1,13 +1,17 @@
-use super::common::{tempdir, vendor, verify_no_windows, VendorOptions};
+use super::common::{targets_supported, tempdir, vendor, verify_no_windows, VendorOptions};
 
 #[test]
 #[serial_test::parallel]
 fn linux_multiple_platforms() {
+    const PLATFORMS: &[&str] = &["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
+    if !targets_supported(PLATFORMS) {
+        return;
+    }
     let (_td, mut test_folder) = tempdir().unwrap();
     test_folder.push("vendor");
     let output = vendor(VendorOptions {
         output: Some(&test_folder),
-        platforms: Some(&["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]),
+        platforms: Some(PLATFORMS),
         exclude_crate_paths: Some(&["hex#benches", "*#tests"]),
         ..Default::default()
     })
@@ -23,11 +27,15 @@ fn linux_multiple_platforms() {
 #[test]
 #[serial_test::parallel]
 fn windows_with_dep_kind_filter_normal() {
+    const PLATFORMS: &[&str] = &["x86_64-pc-windows-gnu"];
+    if !targets_supported(PLATFORMS) {
+        return;
+    }
     let (_td, mut test_folder) = tempdir().unwrap();
     test_folder.push("vendor-test2");
     let output = vendor(VendorOptions {
         output: Some(&test_folder),
-        platforms: Some(&["x86_64-pc-windows-gnu"]),
+        platforms: Some(PLATFORMS),
         keep_dep_kinds: Some("normal"),
         ..Default::default()
     })
@@ -42,11 +50,15 @@ fn windows_with_dep_kind_filter_normal() {
 #[test]
 #[serial_test::parallel]
 fn exclude_with_glob_patterns() {
+    const PLATFORMS: &[&str] = &["x86_64-unknown-linux-gnu"];
+    if !targets_supported(PLATFORMS) {
+        return;
+    }
     let (_td, mut test_folder) = tempdir().unwrap();
     test_folder.push("vendor");
     let output = vendor(VendorOptions {
         output: Some(&test_folder),
-        platforms: Some(&["x86_64-unknown-linux-gnu"]),
+        platforms: Some(PLATFORMS),
         exclude_crate_paths: Some(&["hex#*.md", "*#benches", "libz-sys#src/*.c"]),
         ..Default::default()
     })

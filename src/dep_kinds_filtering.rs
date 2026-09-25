@@ -174,15 +174,36 @@ mod tests {
     use camino::Utf8PathBuf;
     use serde_json::json;
 
+    /// The target rustc compiles for by default. The dependency counts checked
+    /// here don't depend on the platform, and unlike any fixed target, rustc
+    /// can always resolve for its host: a distribution toolchain may link an
+    /// LLVM that lacks the backends of other architectures.
+    fn host_target() -> String {
+        let output = std::process::Command::new("rustc")
+            .args(["--print", "host-tuple"])
+            .output()
+            .expect("failed to run rustc");
+        assert!(
+            output.status.success(),
+            "rustc --print host-tuple failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("rustc printed a non-UTF-8 host tuple")
+            .trim()
+            .to_owned()
+    }
+
     #[test]
     fn test_dep_kind_dev_only() {
         let mut own_cargo_toml = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         own_cargo_toml.push("Cargo.toml");
+        let host = host_target();
         let rp = get_required_packages(
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "dev"})).unwrap(),
-            Some("x86_64-pc-windows-gnu"),
+            Some(host.as_str()),
         )
         .unwrap();
         assert_eq!(rp.len(), 3); // own package + once_cell + serial_test dev dependencies
@@ -207,12 +228,13 @@ mod tests {
     fn test_dep_kind_normal_vs_no_build() {
         let mut own_cargo_toml = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         own_cargo_toml.push("Cargo.toml");
+        let host = host_target();
 
         let rp_normal = get_required_packages(
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "normal"})).unwrap(),
-            Some("x86_64-pc-windows-gnu"),
+            Some(host.as_str()),
         )
         .unwrap();
 
@@ -221,7 +243,7 @@ mod tests {
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "no-build"})).unwrap(),
-            Some("x86_64-pc-windows-gnu"),
+            Some(host.as_str()),
         )
         .unwrap();
 
@@ -238,12 +260,13 @@ mod tests {
     fn test_dep_kind_build_vs_no_dev() {
         let mut own_cargo_toml = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         own_cargo_toml.push("Cargo.toml");
+        let host = host_target();
 
         let rp_build = get_required_packages(
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "build"})).unwrap(),
-            Some("x86_64-unknown-linux-gnu"),
+            Some(host.as_str()),
         )
         .unwrap();
 
@@ -252,7 +275,7 @@ mod tests {
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "no-dev"})).unwrap(),
-            Some("x86_64-unknown-linux-gnu"),
+            Some(host.as_str()),
         )
         .unwrap();
         assert!(
