@@ -1,4 +1,4 @@
-use crate::{Args, VendorFilter};
+use crate::{source_config::Cargo, Args, VendorFilter};
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use clap::{builder::PossibleValue, ValueEnum};
@@ -65,6 +65,7 @@ impl std::fmt::Display for DepKinds {
 /// explicitly does not replace the add_packages_for_platform() entirely.
 pub(crate) fn filter_dep_kinds(
     args: &Args,
+    cargo: &Cargo,
     config: &VendorFilter,
     packages: &mut HashMap<cargo_metadata::PackageId, &cargo_metadata::Package>,
     platform: Option<&str>,
@@ -76,6 +77,7 @@ pub(crate) fn filter_dep_kinds(
     };
 
     let required_packages = get_required_packages(
+        cargo,
         &args.get_all_manifest_paths(),
         args.offline,
         config,
@@ -93,6 +95,7 @@ pub(crate) fn filter_dep_kinds(
 
 /// Returns the set of required packages to satisfy filters specified in config
 fn get_required_packages<'a>(
+    cargo: &Cargo,
     manifest_paths: &[Option<&Utf8Path>],
     offline: bool,
     config: &VendorFilter,
@@ -101,9 +104,10 @@ fn get_required_packages<'a>(
     let keep_dep_kinds = config.keep_dep_kinds.expect("keep_dep_kinds not set");
     let mut required_packages = HashSet::new();
     for manifest_path in manifest_paths {
-        let mut cargo_tree = std::process::Command::new("cargo");
+        let mut cargo_tree = cargo.command();
         cargo_tree
             .arg("tree")
+            .args(cargo.options())
             .args(["--quiet", "--prefix", "none"]) // ignore non-relevant output
             .args(["--edges", &keep_dep_kinds.to_string()]); // key filter not available with metadata
         if offline {
@@ -179,6 +183,7 @@ mod tests {
         let mut own_cargo_toml = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         own_cargo_toml.push("Cargo.toml");
         let rp = get_required_packages(
+            &Cargo::default(),
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "dev"})).unwrap(),
@@ -193,6 +198,7 @@ mod tests {
         let mut own_cargo_toml = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         own_cargo_toml.push("Cargo.toml");
         let rp = get_required_packages(
+            &Cargo::default(),
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "all", "--all-features": true}))
@@ -209,6 +215,7 @@ mod tests {
         own_cargo_toml.push("Cargo.toml");
 
         let rp_normal = get_required_packages(
+            &Cargo::default(),
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "normal"})).unwrap(),
@@ -218,6 +225,7 @@ mod tests {
 
         // no-build => normal + dev dependencies, so including once_call, serial_test...
         let rp_no_build = get_required_packages(
+            &Cargo::default(),
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "no-build"})).unwrap(),
@@ -240,6 +248,7 @@ mod tests {
         own_cargo_toml.push("Cargo.toml");
 
         let rp_build = get_required_packages(
+            &Cargo::default(),
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "build"})).unwrap(),
@@ -249,6 +258,7 @@ mod tests {
 
         // no-dev => build + normal so the list shall be larger
         let rp_no_dev = get_required_packages(
+            &Cargo::default(),
             &[Some(&own_cargo_toml)],
             false,
             &serde_json::from_value(json!({ "keep-dep-kinds": "no-dev"})).unwrap(),
