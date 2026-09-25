@@ -5,6 +5,7 @@ mod features;
 mod format;
 mod json;
 mod platform;
+mod source_config;
 mod sync;
 mod toml;
 mod versioned_dirs;

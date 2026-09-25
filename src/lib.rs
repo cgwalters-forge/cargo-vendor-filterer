@@ -15,7 +15,10 @@ use std::io::{BufReader, Write};
 use std::process::Command;
 use std::vec;
 
+use source_config::Cargo;
+
 mod dep_kinds_filtering;
+mod source_config;
 mod tiers;
 
 /// The path we use in Cargo.toml i.e. `package.metadata.vendor-filter`
@@ -489,13 +492,13 @@ impl VendorFilter {
 }
 
 /// Process CLI arguments into a filter.
-fn gather_config(args: &Args) -> Result<Option<VendorFilter>> {
+fn gather_config(args: &Args, cargo: &Cargo) -> Result<Option<VendorFilter>> {
     // Accept config from arguments first in preference to Cargo.toml metadata.
     if let Some(f) = VendorFilter::parse_args(args)? {
         return Ok(Some(f));
     };
     // Otherwise gather from `package.metadata.vendor-filter` in Cargo.toml
-    let meta = new_metadata_cmd(args.manifest_path.as_deref(), args.offline, None);
+    let meta = new_metadata_cmd(cargo, args.manifest_path.as_deref(), args.offline, None);
     let meta = meta
         .exec()
         .context("Executing cargo metadata (first run)")?;
@@ -742,9 +745,23 @@ impl Args {
         all_manifest_paths
     }
 
+    /// Make the paths of the manifests absolute, resolving them in `cwd`,
+    /// including the default manifest cargo would use.
+    fn make_manifest_paths_absolute(&mut self, cwd: &Utf8Path) -> Result<()> {
+        self.manifest_path = Some(match self.manifest_path.take() {
+            Some(path) => cwd.join(path),
+            None => source_config::find_manifest(cwd)?,
+        });
+        for path in self.sync.iter_mut().flatten() {
+            *path = cwd.join(&*path);
+        }
+        Ok(())
+    }
+
     /// Find the root package
-    fn get_root_package(&self) -> Result<Option<Package>> {
-        let mut command = new_metadata_cmd(self.manifest_path.as_deref(), self.offline, None);
+    fn get_root_package(&self, cargo: &Cargo) -> Result<Option<Package>> {
+        let mut command =
+            new_metadata_cmd(cargo, self.manifest_path.as_deref(), self.offline, None);
         command.no_deps();
 
         let meta = command.exec().context("Executing cargo metadata")?;
@@ -755,13 +772,14 @@ impl Args {
 /// Prepare `cargo metadata`, optionally filtered to the dependencies of one
 /// platform.
 fn new_metadata_cmd(
+    cargo: &Cargo,
     path: Option<&Utf8Path>,
     offline: bool,
     platform: Option<&str>,
 ) -> MetadataCommand {
-    let mut command = MetadataCommand::new();
+    let mut command = cargo.metadata();
     // `other_options` replaces the previous ones, so they're all set at once.
-    let mut options = Vec::new();
+    let mut options: Vec<_> = cargo.options().collect();
     if offline {
         options.push(OFFLINE.to_string());
     }
@@ -776,12 +794,15 @@ fn new_metadata_cmd(
 }
 
 /// Get filesystem locations of packages vendored by `cargo vendor` (all features enabled)
-fn get_vendored_package_dirs(args: &Args) -> Result<HashMap<cargo_metadata::PackageId, String>> {
-    let root = args.get_root_package()?;
+fn get_vendored_package_dirs(
+    args: &Args,
+    cargo: &Cargo,
+) -> Result<HashMap<cargo_metadata::PackageId, String>> {
+    let root = args.get_root_package(cargo)?;
     let all_manifest_paths = args.get_all_manifest_paths();
     let mut pkgs_by_name: HashMap<_, Vec<_>> = HashMap::new();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline, None);
+        let mut command = new_metadata_cmd(cargo, manifest_path, args.offline, None);
         command.features(AllFeatures);
         let meta = command.exec().context("Executing cargo metadata")?;
         meta.packages
@@ -830,12 +851,13 @@ fn get_vendored_package_dirs(args: &Args) -> Result<HashMap<cargo_metadata::Pack
 /// Retrieve packages needed for selected feature set
 fn get_packages_for_features(
     args: &Args,
+    cargo: &Cargo,
     config: &VendorFilter,
 ) -> Result<HashMap<cargo_metadata::PackageId, cargo_metadata::Package>> {
     let all_manifest_paths = args.get_all_manifest_paths();
     let mut packages = HashMap::new();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline, None);
+        let mut command = new_metadata_cmd(cargo, manifest_path, args.offline, None);
         if config.all_features {
             command.features(AllFeatures);
         }
@@ -911,6 +933,7 @@ fn select_packages<'p, T>(
 /// point into the `all_packages` set we already have (to avoid duplicating memory).
 fn add_packages_for_platform<'p>(
     args: &Args,
+    cargo: &Cargo,
     config: &VendorFilter,
     all_packages: &'p HashMap<cargo_metadata::PackageId, cargo_metadata::Package>,
     packages: &mut HashMap<cargo_metadata::PackageId, &'p cargo_metadata::Package>,
@@ -918,7 +941,7 @@ fn add_packages_for_platform<'p>(
 ) -> Result<()> {
     let all_manifest_paths = args.get_all_manifest_paths();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline, platform);
+        let mut command = new_metadata_cmd(cargo, manifest_path, args.offline, platform);
         if config.all_features {
             command.features(AllFeatures);
         }
@@ -1070,8 +1093,15 @@ fn package_versioned_filename(p: &Package) -> String {
 }
 
 /// An inner version of `main`; the primary code.
-pub fn run(args: Args) -> Result<()> {
-    let (had_config, config) = if let Some(c) = gather_config(&args)? {
+pub fn run(mut args: Args) -> Result<()> {
+    let cwd: Utf8PathBuf = std::env::current_dir()?
+        .try_into()
+        .context("Non-UTF-8 current directory")?;
+    let cargo = Cargo::new(&cwd, args.respect_source_config)?;
+    if cargo.relocated() {
+        args.make_manifest_paths_absolute(&cwd)?;
+    }
+    let (had_config, config) = if let Some(c) = gather_config(&args, &cargo)? {
         (true, c)
     } else {
         (false, VendorFilter::default())
@@ -1125,9 +1155,9 @@ pub fn run(args: Args) -> Result<()> {
     // We need to gather the full, unfiltered metadata to canonically know what
     // `cargo vendor` will do.
     eprintln!("Gathering metadata for vendored packages");
-    let vendored_dirs = get_vendored_package_dirs(&args)?;
+    let vendored_dirs = get_vendored_package_dirs(&args, &cargo)?;
     eprintln!("Gathering metadata for selected feature set");
-    let all_packages = get_packages_for_features(&args, &config)?;
+    let all_packages = get_packages_for_features(&args, &cargo, &config)?;
 
     // And now do the filtered set
     let mut packages = HashMap::new();
@@ -1157,6 +1187,7 @@ pub fn run(args: Args) -> Result<()> {
             let mut platform_packages = HashMap::new();
             add_packages_for_platform(
                 &args,
+                &cargo,
                 &config,
                 &all_packages,
                 &mut platform_packages,
@@ -1164,6 +1195,7 @@ pub fn run(args: Args) -> Result<()> {
             )?;
             dep_kinds_filtering::filter_dep_kinds(
                 &args,
+                &cargo,
                 &config,
                 &mut platform_packages,
                 Some(platform),
@@ -1172,8 +1204,8 @@ pub fn run(args: Args) -> Result<()> {
         }
         expanded_platforms = Some(platforms);
     } else {
-        add_packages_for_platform(&args, &config, &all_packages, &mut packages, None)?;
-        dep_kinds_filtering::filter_dep_kinds(&args, &config, &mut packages, None)?;
+        add_packages_for_platform(&args, &cargo, &config, &all_packages, &mut packages, None)?;
+        dep_kinds_filtering::filter_dep_kinds(&args, &cargo, &config, &mut packages, None)?;
     }
 
     // Run `cargo vendor` which will capture all dependencies.
@@ -1271,7 +1303,7 @@ fn test_new_metadata_cmd_options() {
             vec![OFFLINE, filter_platform.as_str()],
         ),
     ] {
-        let cmd = new_metadata_cmd(None, offline, platform).cargo_command();
+        let cmd = new_metadata_cmd(&Cargo::default(), None, offline, platform).cargo_command();
         let args: Vec<_> = cmd.get_args().filter_map(|a| a.to_str()).collect();
         for option in [OFFLINE, filter_platform.as_str()] {
             assert_eq!(
